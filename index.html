@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Swara Lens - Carnatic pitch &amp; gamaka analyzer</title>
+  <meta name="description" content="Record or upload a Carnatic phrase and see its swaras, gamakas and likely raga. Runs entirely in your browser.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>Swara Lens</h1>
+      <p class="tag">See the swaras and gamakas in any phrase. Runs in your browser; your audio never leaves your device.</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="card controls">
+      <div class="row">
+        <button id="btnRec" class="btn primary">&#9679; Record</button>
+        <label class="btn">Upload audio<input id="file" type="file" accept="audio/*" hidden></label>
+        <div class="sa">
+          <label for="saNote">Sa (shruti)</label>
+          <select id="saNote">
+            <option value="auto">Auto-detect</option>
+            <option value="custom" hidden>Custom</option>
+          </select>
+          <input id="saHz" type="number" step="0.1" min="60" max="600" placeholder="Hz" aria-label="Sa frequency in Hz">
+          <span id="saInfo" class="muted"></span>
+        </div>
+      </div>
+      <p class="muted small">Best results: one voice or one melodic instrument, close to the mic, ideally with a tanpura low in the background. Up to 3 minutes is analysed.</p>
+      <div id="statusRow" class="status" hidden><span id="status"></span><progress id="prog" max="1" value="0"></progress></div>
+      <div id="live" class="live" hidden>
+        <div class="liveNote"><span id="liveSwara">-</span></div>
+        <div class="liveMeta"><span id="liveHz">- Hz</span><span id="liveCents" class="muted"></span></div>
+        <canvas id="liveCv" height="90"></canvas>
+      </div>
+    </section>
+
+    <section id="results" hidden>
+      <div class="card">
+        <div class="cardHead">
+          <h2>Pitch contour</h2>
+          <div class="zoom"><label for="zoom">Zoom</label><input id="zoom" type="range" min="30" max="300" value="90"></div>
+        </div>
+        <div class="legend" id="legend"></div>
+        <div class="plot">
+          <canvas id="gut" width="56"></canvas>
+          <div id="scroller" class="scroller"><div id="plotInner" class="plotInner"><canvas id="cv"></canvas><div id="playhead" class="playhead"></div></div></div>
+        </div>
+        <audio id="player" controls></audio>
+        <p class="muted small" id="stats"></p>
+      </div>
+
+      <div class="card">
+        <h2>Likely raga</h2>
+        <div id="ragaBox"></div>
+      </div>
+
+      <div class="card">
+        <div class="cardHead"><h2>Swara notation</h2><button id="btnCopy" class="btn small">Copy</button></div>
+        <p class="muted small">Dot above = tara sthayi, dot below = mandra sthayi. <code>~</code> kampita, <code>&asymp;</code> andolita, <code>/</code> <code>\</code> jaru up or down into the note, <code>&nearr;</code> <code>&searr;</code> slide inside a note, <code>*</code> quick touch of a neighbouring swara, <code>|</code> pause. Tap a note to hear it.</p>
+        <div id="chips" class="chips"></div>
+      </div>
+    </section>
+
+    <section class="card about">
+      <h2>How to read this</h2>
+      <ul>
+        <li>Swaras are placed on a just-intonation grid above your Sa. Where R2 and G1, or R3 and G2, share a position, the shared name is used (R2, G2, D2, N2).</li>
+        <li>Gamakas are detected with simple pitch-movement rules, so treat them as hints, not as a transcription a guru would sign off.</li>
+        <li>The raga suggestion looks at which swaras are used and for how long. It does not hear characteristic phrases, so ragas with identical notes are grouped together.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script src="dsp.js"></script>
+  <script src="ragas.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
