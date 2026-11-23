@@ -272,6 +272,7 @@
       nt.t0 = T0 + nt.start * DT; nt.t1 = T0 + (nt.end + 1) * DT; nt.dur = nt.t1 - nt.t0;
       nt.name = NAMES[nt.idx]; nt.sym = symbol(nt.idx, nt.oct);
       nt.cents = median(raw);
+      { const mu = raw.reduce((a, b) => a + b, 0) / raw.length; nt.sd = Math.sqrt(raw.reduce((a, b) => a + (b - mu) * (b - mu), 0) / raw.length); }
       nt.dev = nt.cents - (nt.oct * 1200 + GRID[nt.idx]);
       nt.g = classifyGamaka(raw, nt.dur);
       nt.gapBefore = k ? nt.t0 - notes[k - 1].t1 : 0;
@@ -325,5 +326,5 @@
     return liveYin(x, x.length - need, 0.15);
   }
 
-  return { SR, DT, T0, GRID, NAMES, toSwara, symbol, resample, createTracker, cleanF0, placeSa, detectSa, analyze, suggestRagas, pitchOfBuffer, median };
+  return { SR, DT, T0, GRID, NAMES, toSwara, symbol, resample, createTracker, cleanF0, placeSa, detectSa, analyze, suggestRagas, pitchOfBuffer, median, classifyGamaka };
 });

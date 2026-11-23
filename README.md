@@ -1,25 +1,34 @@
 # Swara Lens
 
-Record or upload a Carnatic phrase and see its swaras, gamakas and likely raga. Pure static site: no backend, no database, no build step. All audio analysis runs in the user's browser, so hosting is free and nothing is uploaded.
+Record or upload Carnatic music to see its swaras, gamakas and likely raga, and practise against a reference. A static site: no backend, no database, no build step. All audio analysis runs in the user's browser, so hosting is free and nothing is uploaded.
 
-## What it does today
+## What it does
 
-- Pitch tracking (YIN) on mic recordings or uploaded audio, up to 3 minutes
-- Live tuner view while recording (current swara and cents off)
-- Sa (shruti) auto-detection, with manual override by note or exact Hz
-- Pitch contour drawn over the swarasthana grid, with tap-to-seek audio playback
-- Swara segmentation with octave marks, plus gamaka hints: kampita, andolita, jaru (glide into a note), slide within a note, quick touches
-- Raga suggestion from swara usage (22 starter ragas in `ragas.js`), with arohana / avarohana and melakarta info
-- Copyable notation string
+**Analyze**
+- Mic recording with a live tuner (current swara, cents off, rolling contour) or audio upload, up to 3 minutes, with a start-time control for longer files
+- Two pitch trackers: **Solo** (YIN, for one voice or instrument) and **Song / concert** (spectral melody tracker with drone suppression, for recordings with tanpura, violin or percussion). Uploads default to Song, mic recordings to Solo; switching re-analyses instantly
+- Sa (shruti) auto-detection with manual override by note or exact Hz
+- **Fixed-width rolling view**: the contour always fits the screen. Choose a 4 s, 8 s, 15 s or full window; it follows playback or the live signal, has a mini-map to jump around, drag to pan, tap to seek
+- Swara notation with octave marks and gamaka hints (kampita, andolita, jaru, slide, touch), raga suggestion with arohana / avarohana
+
+**Practice**
+- *Self-check*: how far each held swara sits from the pure position, with advice for individual notes that are off
+- *Compare with a reference*: sing a phrase back; your attempt is aligned to the reference (DTW), so a different tempo, shruti or octave does not count against you. You get a score, pitch accuracy, gamaka match, and note-by-note feedback ("G3: flat by 47 cents, kampita missing")
+
+**Library**
+- Save analyses and practice attempts in the browser (IndexedDB). Pitch data is tiny (about 10 KB per 100 s); audio is optional. Export / import a JSON backup
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
-| `index.html`, `style.css`, `app.js` | UI |
-| `dsp.js` | Pitch tracking, Sa detection, swara and gamaka analysis, raga scoring (works in browser and Node) |
-| `ragas.js` | Raga data. Have a guru check and extend it |
-| `test.js` | `node test.js` synthesizes a Mohanam phrase and checks the engine |
+| `index.html`, `style.css`, `app.js` | UI, viewer, practice and library screens |
+| `dsp.js` | YIN pitch tracking, Sa detection, swara and gamaka analysis, raga scoring |
+| `melody.js` | Melody tracker for mixed music |
+| `practice.js` | Intonation report and DTW reference comparison |
+| `store.js` | IndexedDB library, backup, storage persistence |
+| `ragas.js` | Raga data (starter set, have a guru review it) |
+| `test.js`, `test_mix.js`, `test_practice.js` | Node tests on synthetic audio: `node test.js` etc. |
 | `vercel.json` | Mic permission header, clean URLs |
 
 ## Run locally
@@ -28,46 +37,46 @@ Record or upload a Carnatic phrase and see its swaras, gamakas and likely raga. 
 npx serve .        # or: python3 -m http.server 3000
 ```
 
-Open the printed URL. The mic works on `localhost` and on any HTTPS site.
+The mic works on `localhost` and on any HTTPS site.
 
 ## Deploy to Vercel (free)
 
-**Option A, no CLI:**
-1. Create a GitHub repo and upload these files (or `git init && git add . && git commit && git push`).
+1. Push this folder to a GitHub repo.
 2. On vercel.com choose Add New, then Project, and import the repo.
-3. Framework Preset: **Other**. Leave Build Command and Output Directory empty. Deploy.
-4. You get `https://<name>.vercel.app` with HTTPS, which the mic needs.
+3. Framework Preset **Other**, leave build settings empty, Deploy.
 
-**Option B, CLI:**
-```bash
-npm i -g vercel
-vercel          # first run links the project
-vercel --prod
-```
+CLI alternative: `npm i -g vercel`, then `vercel --prod`.
 
-Notes on cost:
-- Vercel's free Hobby plan is meant for personal, non-commercial use. That is fine for a pitch demo. Check their current terms before you charge users; Cloudflare Pages and Netlify have free static hosting too, and this project moves over unchanged.
-- A custom domain is the only real cost (about 700 to 1,000 INR a year).
+Check Vercel's Terms of Service before charging users on the free Hobby plan. I could not confirm the exact wording of its commercial-use rules from their docs pages, so do not rely on this README for that. Cloudflare Pages and Netlify also host static sites for free, and this project moves over unchanged.
+
+## Storage options
+
+Checked against the providers' pages in November 2026. Limits change, so re-check before you commit.
+
+| Option | Free allowance | Catches | Fit |
+| --- | --- | --- | --- |
+| **Browser (IndexedDB)**, built in | Browser-managed quota | Private to one device and browser. Browsers can evict it; `persist()` helps (Chrome decides silently, Firefox asks, Safari uses heuristics). Safari may clear sites you have not used for a while | Best for now: free, private, no sign-up. Export a backup |
+| **Supabase** | 500 MB database, 1 GB files, 50 MB max upload, 5 GB egress, 50,000 monthly users, 2 active projects | Free projects pause after about a week of inactivity (they keep their data and can be restored) | Best first cloud step: Postgres, login and file storage in one. 500 MB holds thousands of pitch-only recordings (about 100 KB for 3 minutes) |
+| **Cloudflare R2 + D1** | R2: 10 GB-month, 1M writes, 10M reads, no egress fees. D1: 5 GB, 5M rows read and 100k rows written per day | You must write a Worker to front them. From 1 September 2026 D1 queries fail after the daily limits until midnight UTC | Good for audio files later; more setup |
+| **Vercel Blob (Hobby)** | 1 GB, 10,000 simple and 2,000 advanced operations, 10 GB transfer | Going over blocks Blob for 30 days | Fine for a demo, tight for real use |
+| **Firebase** | Firestore: about 20,000 writes and 50,000 reads per day (example figures on their plans page) | Their September 2024 FAQ says Cloud Storage now needs the pay-as-you-go Blaze plan, while the plans page still lists it under the free plan. Confirm in the console before relying on it | Skip unless you already use Firebase |
+
+**Recommendation:** keep the browser library as the default. Add accounts and sync only when users ask for another device, using Supabase and storing the pitch track and notation, not audio. Keep audio local; it is the heavy part and the copyright-sensitive part. `store.js` already has the small `put / get / list / remove` interface a cloud backend would plug into.
 
 ## Known limits (say these in your pitch before anyone else does)
 
-- Works best on a single voice or instrument. Full concerts with violin, mridangam and tanpura need source separation, which is a later phase.
-- Gamaka detection is rule-based. It separates steady notes, oscillations, slow swings and glides; it does not yet name every gamaka (nokku, sphurita, pratyahatam, etc.) reliably.
-- Raga suggestion is by swara usage, not by characteristic phrases, so ragas with identical notes (for example Natabhairavi and Bhairavi) are listed together.
-- Intonation grid is just intonation; real singers vary, and the app shows the deviation in cents on each chip's tooltip.
-- Raga data is a starter set. Get it reviewed by a teacher before launch.
+- **Tested only on synthetic audio and a fake microphone.** Real concerts and film songs are harder: a violin shadowing the voice, a pitched mridangam, reverb. The Song tracker handles drone and percussion in tests; it does not separate a voice from other melodic instruments. Heavily produced songs need source separation, which is the next phase.
+- Gamaka detection is rule-based: steady, oscillation (kampita or andolita), glide, slide. It does not name nokku, sphurita or pratyahatam reliably.
+- Practice mode does not yet check whether you reproduced each jaru. It checks pitch, gamaka type, timing and steadiness.
+- The self-check cannot tell a flat G3 from a sharp G2 on its own (they are about 70 cents apart); a reference settles it.
+- Raga suggestion uses swara usage, not phrases, so ragas with identical notes are grouped.
+- The pure-intonation grid is a reference, not the truth; singers and ragas vary, so treat under 20 cents as fine.
+- Raga data is a starter set written without a guru's review.
 
 ## Roadmap
 
-1. **Pilot with 5 to 10 teachers and students.** Record real phrases, note where gamaka labels are wrong. This is your most valuable data.
-2. **Practice mode:** record a teacher's phrase, let the student sing it back, overlay both contours and score pitch accuracy, shruti stability and gamaka shape.
-3. **Better raga ID:** add phrase (pidi) matching and more ragas, trained on CompMusic / Dunya Carnatic datasets.
-4. **Save sessions** (free tier of Supabase or Firebase) and share a result link.
-5. **ML upgrade:** run a small ONNX model in the browser (CREPE-tiny for pitch, a separation model for polyphonic audio) when you have data to justify it.
-6. **PWA / mobile wrapper** once the web version is proven.
-
-## Pitch tips
-
-- Demo with a live phrase from a real singer, not a studio file. The moving contour with kampita highlighted is the moment people get it.
-- Lead with the learner problem ("practising at night with no guru nearby"), then the tech.
-- Show the practice-feedback idea as the next step; that is what retains users.
+1. **Pilot with 5 to 10 teachers and students.** Record real phrases, note where gamaka labels and scores are wrong. This data is your edge.
+2. Jaru and entry-shape checks in practice mode; progress over time from saved attempts.
+3. Source separation (small ONNX model in the browser) for polyphonic recordings.
+4. Phrase (pidi) matching for raga identification, trained on CompMusic datasets.
+5. Accounts and cross-device sync (Supabase), then a PWA / mobile wrapper.
