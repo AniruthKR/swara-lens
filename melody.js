@@ -104,6 +104,33 @@
           floor[b] = Float32Array.from(col).sort()[q];
         }
       },
+      // Pitch of the steady background (tanpura / shruti box). Call after prepare().
+      // Returns a 1200-bin profile (cents above A, one octave) of how Sa-like each pitch class is
+      // (its own weight plus half the weight of the note a fifth above), and how peaked it is.
+      droneProfile() {
+        const raw = new Float64Array(1200);
+        for (let k = 0; k < NC; k++) {
+          let s = 0;
+          for (let h = 0; h < NH; h++) {
+            const p = pos[k * NH + h];
+            if (p < 0) break;
+            const i0 = p | 0, fr = p - i0;
+            s += hw[h] * (floor[i0] * (1 - fr) + floor[i0 + 1] * fr);
+          }
+          const f = FMIN * Math.pow(2, (k * CENT_STEP) / 1200);
+          raw[Math.round((((1200 * Math.log2(f / 440)) % 1200) + 1200) % 1200) % 1200] += s;
+        }
+        const S = new Float64Array(1200), sigma = 12, rad = 36, ker = [];
+        for (let k = -rad; k <= rad; k++) ker.push(Math.exp(-(k * k) / (2 * sigma * sigma)));
+        for (let c = 0; c < 1200; c++) { let s = 0; for (let k = -rad; k <= rad; k++) s += raw[(c + k + 1200) % 1200] * ker[k + rad]; S[c] = s; }
+        const score = new Float64Array(1200); let best = 0, mx = 0;
+        for (let c = 0; c < 1200; c++) { score[c] = S[c] + 0.5 * S[(c + 702) % 1200]; if (score[c] > mx) { mx = score[c]; best = c; } }
+        const sorted = Array.from(score).sort((a, b) => a - b), med = Math.max(1e-9, sorted[600]);
+        // contrast: how far the best pitch class stands above a typical one. A real drone gives roughly 0.3 to 0.8,
+        // noise and percussion alone roughly 0.1 to 0.4, so it is used as a soft weight, never a hard switch.
+        const contrast = (mx - med) / med;
+        return { score, best, max: mx, contrast, conf: Math.max(0, Math.min(1, (contrast - 0.25) / 0.45)) };
+      },
       // Pass 1: salience and candidate peaks for frames [from, to)
       run(from, to) {
         const end = Math.min(to, total);
@@ -143,16 +170,16 @@
           maxSal[i] = bv[0];
         }
       },
-      // Viterbi over candidates plus a "silent" state.
-      finish() {
-        const out = new Float32Array(total);
-        if (!total) return out;
+      // Viterbi over candidates plus a "silent" state. mask[i*K+k] = 1 forbids that candidate.
+      viterbi(mask) {
+        const res = { f0: new Float32Array(total), cand: new Int8Array(total).fill(-1), sal: 0, voiced: 0 };
+        if (!total) return res;
         const nz = Array.from(maxSal).filter((v) => v > 0).sort((a, b) => a - b);
-        if (!nz.length) return out;
+        if (!nz.length) return res;
         const ref = nz[Math.floor(0.95 * (nz.length - 1))] || 1;
         const S = K + 1, back = new Uint8Array(total * S);
         let prev = new Float64Array(S), cur = new Float64Array(S);
-        const emis = (i, k) => (k < K ? (candS[i * K + k] > 0 ? -Math.min(candS[i * K + k] / ref, 1.5) : 1e9) : -TAU);
+        const emis = (i, k) => (k < K ? (candS[i * K + k] > 0 && !(mask && mask[i * K + k]) ? -Math.min(candS[i * K + k] / ref, 1.5) : 1e9) : -TAU);
         for (let k = 0; k < S; k++) prev[k] = emis(0, k);
         for (let i = 1; i < total; i++) {
           for (let k = 0; k < S; k++) {
@@ -172,13 +199,52 @@
         let st = 0, bc = Infinity;
         for (let k = 0; k < S; k++) if (prev[k] < bc) { bc = prev[k]; st = k; }
         for (let i = total - 1; i >= 0; i--) {
-          if (st < K && candS[i * K + st] > 0) out[i] = FMIN * Math.pow(2, (candC[i * K + st] * CENT_STEP) / 1200);
+          if (st < K && candS[i * K + st] > 0 && !(mask && mask[i * K + st])) {
+            res.f0[i] = FMIN * Math.pow(2, (candC[i * K + st] * CENT_STEP) / 1200);
+            res.cand[i] = st; res.sal += candS[i * K + st]; res.voiced++;
+          }
           st = back[i * S + st];
         }
-        return out;
+        res.voiced /= total;
+        return res;
+      },
+      finish() { return this.viterbi(null).f0; },
+      // Several melodic lines, dominant first. After each line is found, candidates at the same pitch and at
+      // its harmonic "ghosts" (octaves, fifths above the octave, the fifth) are masked, so the next line is
+      // something genuinely different. A line is dominant when it has more salience, i.e. it is louder and more
+      // continuous after the steady drone has been removed. This separates melodic lines by pitch, it is not
+      // source separation: a violin doubling the singer at the same pitch is one line, not two.
+      finishLines(maxLines) {
+        const lines = [], mask = new Uint8Array(total * K), ghosts = [0, 1200, -1200, 2400, -2400, 1902, -1902, 702, -702];
+        for (let li = 0; li < (maxLines || 2); li++) {
+          const r = this.viterbi(mask);
+          if (r.voiced < 0.05) break;
+          lines.push(r);
+          for (let i = 0; i < total; i++) {
+            const kc = r.cand[i]; if (kc < 0) continue;
+            const c0 = candC[i * K + kc];
+            for (let k = 0; k < K; k++) {
+              const d = (candC[i * K + k] - c0) * CENT_STEP;
+              for (const gh of ghosts) if (Math.abs(d - gh) < 100) { mask[i * K + k] = 1; break; }
+            }
+          }
+        }
+        return lines;
       },
     };
   }
 
-  return { SR, HOP, createTracker, resample };
+  // For each of the 12 swarasthanas above saHz: how strongly does the drone say "this is Sa"? 0..1.
+  // Returns { boost, conf } or null when the drone cue is negligible. conf (0..1) says how much to trust it.
+  function droneTonic(drone, saHz, grid) {
+    if (!drone || drone.conf < 0.05) return null;
+    const boost = grid.map((g) => {
+      const hz = saHz * Math.pow(2, g / 1200), c = Math.round((((1200 * Math.log2(hz / 440)) % 1200) + 1200) % 1200);
+      let m = 0; for (let k = -15; k <= 15; k++) m = Math.max(m, drone.score[(c + k + 1200) % 1200]);
+      return m / drone.max;
+    });
+    return { boost, conf: drone.conf };
+  }
+
+  return { SR, HOP, createTracker, resample, droneTonic };
 });

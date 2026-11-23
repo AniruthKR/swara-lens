@@ -159,7 +159,9 @@
   }
 
   // Heuristic: Sa and Pa are the most "anchored" notes, and phrases usually end on Sa.
-  function detectSa(f0) {
+  // saProfile gives, for each of the 1200 pitch classes (cents above A, mod an octave), how Sa-like it is:
+  // its own weight plus half the weight of the note a fifth above it. The tail of the clip counts triple.
+  function saProfile(f0) {
     const n = f0.length, H = new Float64Array(1200);
     let voiced = 0;
     const tailFrom = n - Math.round(3 / DT);
@@ -178,12 +180,31 @@
       for (let k = -rad; k <= rad; k++) s += H[(c + k + 1200) % 1200] * ker[k + rad];
       S[c] = s;
     }
+    const score = new Float64Array(1200);
     let best = 0, bs = -1;
     for (let c = 0; c < 1200; c++) {
-      const sc = S[c] + 0.5 * S[(c + 702) % 1200];
-      if (sc > bs) { bs = sc; best = c; }
+      score[c] = S[c] + 0.5 * S[(c + 702) % 1200];
+      if (score[c] > bs) { bs = score[c]; best = c; }
     }
-    return placeSa(440 * Math.pow(2, best / 1200), f0);
+    return { score, best, max: bs };
+  }
+  function detectSa(f0) {
+    const p = saProfile(f0);
+    return p ? placeSa(440 * Math.pow(2, p.best / 1200), f0) : null;
+  }
+  // How Sa-like is each of the 12 swarasthanas above the given Sa? 1 = as strong as the best candidate.
+  function tonicPrior(f0, saHz) {
+    const p = saProfile(f0);
+    if (!p) return null;
+    const out = [];
+    for (let t = 0; t < 12; t++) {
+      const hz = saHz * Math.pow(2, GRID[t] / 1200);
+      const c = Math.round((((1200 * Math.log2(hz / 440)) % 1200) + 1200) % 1200);
+      let m = 0;
+      for (let k = -15; k <= 15; k++) m = Math.max(m, p.score[(c + k + 1200) % 1200]);
+      out.push(m / p.max);
+    }
+    return out;
   }
 
   // ---- Gamaka heuristics ---------------------------------------------------
@@ -326,5 +347,5 @@
     return liveYin(x, x.length - need, 0.15);
   }
 
-  return { SR, DT, T0, GRID, NAMES, toSwara, symbol, resample, createTracker, cleanF0, placeSa, detectSa, analyze, suggestRagas, pitchOfBuffer, median, classifyGamaka };
+  return { SR, DT, T0, GRID, NAMES, toSwara, symbol, resample, createTracker, cleanF0, placeSa, detectSa, tonicPrior, analyze, suggestRagas, pitchOfBuffer, median, classifyGamaka };
 });

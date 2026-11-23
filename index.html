@@ -59,8 +59,14 @@
         <div class="card">
           <h2>Pitch contour</h2>
           <div class="legend" id="legend"></div>
+          <div id="leadBox" class="leadBox" hidden>
+            <span class="small"><b>Two melodic lines found</b> (for example voice and violin). Following the <span id="leadWhich">louder</span> one; the other is drawn faintly.</span>
+            <div class="seg" id="leadSeg"><button type="button" data-lead="0" class="on">Louder line</button><button type="button" data-lead="1">Quieter line</button></div>
+          </div>
+          <div id="nowPlaying" class="nowPlaying" aria-live="off">Play the audio or tap a note to see its pitch here.</div>
           <div id="viewerMain"></div>
           <audio id="player" controls></audio>
+          <label class="check small"><input id="speak" type="checkbox"> Say swara names while the audio plays</label>
           <p class="muted small" id="stats"></p>
         </div>
 
@@ -73,6 +79,12 @@
           <div class="cardHead"><h2>Swara notation</h2><button id="btnCopy" class="btn small">Copy</button></div>
           <p class="muted small">Dot above = tara sthayi, dot below = mandra sthayi. <code>~</code> kampita, <code>&asymp;</code> andolita, <code>/</code> <code>\</code> jaru up or down into the note, <code>&nearr;</code> <code>&searr;</code> slide inside a note, <code>*</code> quick touch of a neighbouring swara, <code>|</code> pause. Tap a note to hear it.</p>
           <div id="chips" class="chips"></div>
+        </div>
+
+        <div class="card">
+          <div class="cardHead"><h2>Pitch by note</h2><button id="btnCopyPitch" class="btn small">Copy table</button></div>
+          <p class="muted small">What was actually sung or played (Hz) against the exact position of that swara for this Sa. <b>Off</b> is the gap in cents (100 cents = one semitone): minus is flat, plus is sharp.</p>
+          <div class="tblWrap"><table id="pitchTable" class="ptable"><thead><tr><th>Time</th><th>Swara</th><th>Heard</th><th class="wide">Ideal</th><th>Off</th><th class="wide">Western</th><th>Gamaka</th></tr></thead><tbody></tbody></table></div>
         </div>
 
         <div class="card">
@@ -91,6 +103,8 @@
         <ul>
           <li>Swaras sit on a just-intonation grid above your Sa. Where R2 and G1 (or R3 and G2) share a position, the shared name is used (R2, G2, D2, N2).</li>
           <li><b>Kampita</b> is a fast oscillation (about three or more swings a second), <b>andolita</b> a slower swing, and a <b>slide</b> is a steady drift inside one note.</li>
+          <li><b>Concert recordings:</b> the app follows the most prominent melodic line (usually the singer, or the violin or veena if it is louder) and ignores the steady drone and percussion. If it finds a second line it shows it faintly and lets you switch. It follows the louder line; it does not know which instrument is which, and a violin playing the same notes as the singer counts as one line.</li>
+          <li><b>Raga:</b> shown with a confidence level. It reads which swaras are used and how the lines rise and fall, and it also tests other possible Sa positions, because the same notes are a different raga under a different Sa. Ragas with identical notes can only be told apart by their phrases.</li>
           <li>Gamakas are found with simple pitch-movement rules, so treat them as hints, not as a transcription a guru would sign off.</li>
           <li>The raga suggestion looks at which swaras are used and for how long. It does not hear characteristic phrases, so ragas with identical notes are grouped.</li>
         </ul>
@@ -164,6 +178,7 @@
   <script src="melody.js"></script>
   <script src="practice.js"></script>
   <script src="ragas.js"></script>
+  <script src="ragaid.js"></script>
   <script src="store.js"></script>
   <script src="app.js"></script>
 </body>

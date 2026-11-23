@@ -9,7 +9,7 @@
   const STATUS_COL = { good: '#4ed1a0', close: '#ffd166', flat: '#ff6b6b', sharp: '#ff6b6b', missed: '#7b8494' };
   const MAX_SECONDS = 180, SR16 = 16000, LDT = 0.02;
 
-  const state = { x16: null, blob: null, f0: null, saHz: null, saAuto: true, an: null, mode: 'solo', name: '', source: 'record', run: 0 };
+  const state = { lines: null, lead: 0, drone: null, rag: null, x16: null, blob: null, f0: null, saHz: null, saAuto: true, an: null, mode: 'solo', name: '', source: 'record', run: 0 };
   const practice = { ref: null, att: null, res: null };
 
   // ---------------------------------------------------------------- helpers
@@ -257,21 +257,26 @@
     } finally { if (ac.close) ac.close(); }
   }
 
-  // Solo: YIN. Song: spectral melody tracker with drone suppression. Both give one value per 10 ms.
+  // Solo: YIN, one line. Song: spectral melody tracker with drone suppression, up to two melodic lines
+  // (dominant first) and the drone's pitch profile. Returns { lines: [{ f0, sal, voiced }], drone }.
   async function trackF0(x16, mode, prog) {
     if (mode === 'song') {
       const tm = MELODY.createTracker(x16);
       prog('Learning the drone...', 0); await tick();
       tm.prepare();
+      const drone = tm.droneProfile();
       const STEP = 300;
       for (let i = 0; i < tm.total; i += STEP) { tm.run(i, i + STEP); prog('Finding the melody...', i / Math.max(1, tm.total)); await tick(); }
-      prog('Choosing the best path...', null); await tick();
-      return DSP.cleanF0(tm.finish());
+      prog('Choosing the main line...', null); await tick();
+      const lines = tm.finishLines(2).map((l) => ({ f0: DSP.cleanF0(l.f0), sal: l.sal, voiced: l.voiced })).sort((a, b) => b.sal - a.sal);
+      if (!lines.length) lines.push({ f0: new Float32Array(tm.total), sal: 0, voiced: 0 });
+      return { lines, drone };
     }
     const tr = DSP.createTracker(DSP.resample(x16, SR16, DSP.SR));
     const STEP = 400;
     for (let i = 0; i < tr.total; i += STEP) { tr.run(i, i + STEP); prog('Tracking pitch...', i / Math.max(1, tr.total)); await tick(); }
-    return DSP.cleanF0(tr.result());
+    const f0 = DSP.cleanF0(tr.result());
+    return { lines: [{ f0, sal: 0, voiced: f0.filter((v) => v > 0).length / Math.max(1, f0.length) }], drone: null };
   }
 
   // ---------------------------------------------------------------- ANALYZE tab
@@ -309,10 +314,11 @@
     if (!state.x16) return;
     const id = ++state.run;
     setStatus('Starting...', 0);
-    let f0;
-    try { f0 = await trackF0(state.x16, state.mode, setStatus); } catch (e) { setStatus(''); toast('Analysis failed on this audio.'); return; }
+    let tr;
+    try { tr = await trackF0(state.x16, state.mode, setStatus); } catch (e) { setStatus(''); toast('Analysis failed on this audio.'); return; }
     if (id !== state.run) return;           // a newer analysis started
-    state.f0 = f0;
+    state.lines = tr.lines; state.drone = tr.drone; state.lead = 0;
+    state.f0 = tr.lines[0].f0;
     state.saAuto = $('saNote').value === 'auto' || !state.saHz;
     setStatus('');
     recompute();
@@ -357,14 +363,15 @@
     if (state.x16) runMain(); else toast('Saved items keep their pitch data; the audio type applies to new recordings and uploads.');
   });
 
-  function recompute() {
+  function recompute(opts) {
     if (!state.f0) return;
-    if (state.saAuto) state.saHz = DSP.detectSa(state.f0);
+    if (state.saAuto && !(opts && opts.keepSa && state.saHz)) state.saHz = DSP.detectSa(state.f0);   // switching lines keeps the same Sa
     $('results').hidden = false;
     if (!state.saHz) {
       state.an = null;
       $('ragaBox').innerHTML = '<p class="muted">Could not find a clear pitch. Try a closer, quieter recording of a single voice or instrument, or choose the audio type that matches.</p>';
       $('chips').innerHTML = ''; $('stats').textContent = '';
+      $('pitchTable').querySelector('tbody').innerHTML = ''; $('leadBox').hidden = true; state.rag = null;
       viewerMain.setData(null);
       return;
     }
@@ -376,31 +383,57 @@
     const { lo, hi } = an.range ? rangeOf([an.range.lo, an.range.hi]) : { lo: -200, hi: 1400 };
     viewerMain.setData({
       duration: an.duration, lo, hi, grid: true,
-      series: [{ t0: DSP.T0, dt: DSP.DT, vals: an.cents, color: '#ffd9a0', width: 2 }],
+      series: otherLineSeries().concat([{ t0: DSP.T0, dt: DSP.DT, vals: an.cents, color: '#ffd9a0', width: 2 }]),
       bands: an.notes.map((n) => ({ t0: n.t0, t1: n.t1, pos: posOf(n), color: COL[n.g.type] || COL.steady, token: n.token })),
     });
-    renderRaga(DSP.suggestRagas(an.notes, RAGAS));
+    renderLeadBox();
+    state.rag = RAGAID.identify(an, RAGAS, ragaOptions());
+    renderRaga(state.rag);
     renderChips();
+    renderPitchTable();
+    nowInfo(null);
     if (!$('tab-practice').hidden) renderSelfCheck();
   }
+
+  // evidence the raga engine may use: how Sa-like each tonic looks, and what the drone says
+  function ragaOptions() {
+    const o = { fixTonic: !state.saAuto, prior: DSP.tonicPrior(state.f0, state.saHz) || undefined };
+    if (state.drone) { const d = MELODY.droneTonic(state.drone, state.saHz, DSP.GRID); if (d) o.drone = d; }
+    return o;
+  }
+  const CONF_TEXT = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' };
+  function setSa(hz) { state.saAuto = false; state.saHz = hz; recompute(); }
 
   function renderRaga(rag) {
     const el = $('ragaBox');
     if (!rag.ok) { el.innerHTML = `<p class="muted">${esc(rag.reason)}</p>`; return; }
-    const topSet = new Set(rag.groups[0].set);
-    const max = Math.max(...rag.share, 0.001);
+    const topSet = new Set(rag.groups[0].set), max = Math.max(...rag.share, 0.001);
+    const conf = `<div class="row"><span class="conf ${rag.confidence}">${CONF_TEXT[rag.confidence]}</span>
+      <span class="muted small">${rag.confidence === 'high' ? 'Every note of the raga was heard, it clearly beats the next one, and Sa looks settled.'
+        : rag.confidence === 'medium' ? 'A good fit, but another raga is close or part of the raga was not heard.' : 'Treat this as a first guess. More singing, a clearer recording, or setting Sa yourself will help.'}</span></div>`;
+    let banner = '';
+    if (rag.tonic.changed) {
+      banner += `<div class="altSa"><b>These notes read better with a different Sa.</b> <span class="small">With the Sa detected (${state.saHz.toFixed(1)} Hz) they fit poorly; with Sa at ${rag.tonic.saHz.toFixed(1)} Hz (${esc(westernName(rag.tonic.saHz))}) they fit the raga below. The raga shown uses that Sa.</span><br>
+        <button class="btn small" type="button" data-sa="${rag.tonic.saHz}">Use Sa = ${rag.tonic.saHz.toFixed(1)} Hz</button></div>`;
+    }
+    for (const a of rag.alts) {
+      banner += `<div class="altSa"><b>${a.close ? 'Sa is ambiguous.' : 'Another reading:'}</b> <span class="small">if Sa were ${a.saHz.toFixed(1)} Hz (${esc(westernName(a.saHz))}), this would look like <b>${esc(a.group.ragas.slice(0, 3).map((r) => r.name).join(' / '))}</b>.</span><br>
+        <button class="btn small" type="button" data-sa="${a.saHz}">Try Sa = ${a.saHz.toFixed(1)} Hz</button></div>`;
+    }
     const cards = rag.groups.map((g, i) => {
-      const items = g.ragas.map((r) => `<div class="ragaItem"><b>${esc(r.name)}</b> <span class="muted small">${esc(r.mela)}</span>
+      const items = g.ragas.map((r) => `<div class="ragaItem"><b>${esc(r.name)}</b> <span class="muted small">${esc(r.mela)}${r.aka ? ' &middot; ' + esc(r.aka) : ''}</span>
         <div class="mono">&uarr; ${esc(r.aro)}</div><div class="mono">&darr; ${esc(r.ava)}</div>${r.related ? `<div class="muted small">${esc(r.related)}</div>` : ''}</div>`).join('');
-      const same = g.ragas.length > 1 ? '<div class="muted small">These ragas share the same notes. Their phrases and gamakas tell them apart, which this app does not hear yet.</div>' : '';
-      return `<div class="ragaMain ${i === 0 ? 'top' : ''}"><div class="ragaHead"><span class="muted small">${i === 0 ? 'Best match' : 'Also possible'}</span><span class="badge">${Math.round(g.score * 100)}% note match</span></div>${items}${same}</div>`;
+      const same = g.ragas.length > 1 ? '<div class="muted small">These ragas use exactly the same notes. They are listed by how well the ascent and descent fit; their phrases and gamakas decide the rest, which this app does not hear yet.</div>' : '';
+      const why = `<p class="muted small why">Heard ${g.used} of its ${g.set.length} notes. ${Math.round(g.inMass * 100)}% of the singing falls inside it.</p>`;
+      return `<div class="ragaMain ${i === 0 ? 'top' : ''}"><div class="ragaHead"><span class="muted small">${i === 0 ? 'Best match' : 'Also possible'}</span><span class="badge">${Math.round(g.score * 100)}% fit</span></div>${items}${same}${why}</div>`;
     }).join('');
     const bars = NAMES.map((n, i) => {
       const cls = topSet.has(i) ? 'in' : rag.share[i] > 0.03 ? 'out' : '';
       return `<div class="bar ${cls}"><div style="height:${Math.round((rag.share[i] / max) * 100)}%"></div>${n}</div>`;
     }).join('');
-    el.innerHTML = cards + `<p class="muted small">Swaras used (share of time). Gold = in the best-match raga, red = sung but not in it.</p><div class="bars">${bars}</div>
-      <p class="muted small">This is a suggestion from swara usage only. Confirm with your ear or your guru.</p>`;
+    el.innerHTML = conf + banner + cards + `<p class="muted small">Swaras used (share of time, read against the Sa behind the raga shown). Gold = in the best-match raga, red = sung but not in it.</p><div class="bars">${bars}</div>
+      <p class="muted small">This looks at which swaras are used and how the lines go up and down. It cannot hear characteristic phrases, so confirm with your ear or your guru.</p>`;
+    el.querySelectorAll('button[data-sa]').forEach((b) => b.addEventListener('click', () => setSa(parseFloat(b.dataset.sa))));
   }
 
   function renderChips() {
@@ -410,7 +443,7 @@
       const b = document.createElement('button');
       b.type = 'button'; b.className = 'chip t-' + n.g.type; b.textContent = n.token;
       b.title = `${n.name} ${n.g.type}, ${n.dur.toFixed(2)} s, ${n.dev >= 0 ? '+' : ''}${Math.round(n.dev)}¢ from the grid`;
-      b.addEventListener('click', () => { viewerMain.focus(n.t0); playFrom(n.t0); });
+      b.addEventListener('click', () => { viewerMain.focus(n.t0); nowInfo(n.t0 + 0.05); playFrom(n.t0); });
       box.appendChild(b);
     });
     if (!state.an.notes.length) box.innerHTML = '<span class="muted">No steady notes found.</span>';
@@ -426,9 +459,78 @@
   function hasAudio() { return !player.hidden && !!player.getAttribute('src'); }
   function seekPlayer(t) { if (hasAudio()) player.currentTime = Math.max(0, t); viewerMain.setPlayT(t, !player.paused); }
   function playFrom(t) { if (!hasAudio()) return; player.currentTime = Math.max(0, t - 0.05); player.play().catch(() => {}); }
-  function follow() { viewerMain.setPlayT(player.currentTime, true); if (!player.paused) requestAnimationFrame(follow); }
+  function follow() { viewerMain.setPlayT(player.currentTime, true); nowInfo(player.currentTime, !player.paused); if (!player.paused) requestAnimationFrame(follow); }
   player.addEventListener('play', () => requestAnimationFrame(follow));
-  ['seeked', 'timeupdate', 'pause'].forEach((ev) => player.addEventListener(ev, () => viewerMain.setPlayT(player.currentTime, !player.paused)));
+  ['seeked', 'timeupdate', 'pause'].forEach((ev) => player.addEventListener(ev, () => { viewerMain.setPlayT(player.currentTime, !player.paused); nowInfo(player.currentTime, false); }));
+
+  // ---------------------------------------------------------------- lead line (which melodic line is followed)
+  // The other line, if there is a real second one, is drawn faintly for context.
+  function secondLine() { return state.lines && state.lines.length > 1 && state.lines[1].voiced >= 0.15 ? state.lines[1] : null; }
+  function otherLineSeries() {
+    const o = secondLine(); if (!o || !state.saHz) return [];
+    const ln = state.lines[1 - state.lead]; if (!ln) return [];
+    const vals = new Float32Array(ln.f0.length);
+    for (let i = 0; i < vals.length; i++) vals[i] = ln.f0[i] > 0 ? 1200 * Math.log2(ln.f0[i] / state.saHz) : NaN;
+    return [{ t0: DSP.T0, dt: DSP.DT, vals, color: '#7f93b3', width: 1.5, alpha: 0.5 }];
+  }
+  function renderLeadBox() {
+    const two = !!secondLine();
+    $('leadBox').hidden = !two;
+    if (!two) return;
+    $('leadWhich').textContent = state.lead === 0 ? 'louder' : 'quieter';
+    document.querySelectorAll('#leadSeg button').forEach((b) => b.classList.toggle('on', Number(b.dataset.lead) === state.lead));
+  }
+  document.querySelectorAll('#leadSeg button').forEach((b) => b.addEventListener('click', () => {
+    const i = Number(b.dataset.lead);
+    if (!state.lines || !state.lines[i] || i === state.lead) return;
+    state.lead = i; state.f0 = state.lines[i].f0; recompute({ keepSa: true });
+  }));
+
+  // ---------------------------------------------------------------- calling out the pitch
+  const hzAt = (sa, cents) => sa * Math.pow(2, cents / 1200);
+  function renderPitchTable() {
+    const an = state.an, tb = $('pitchTable').querySelector('tbody'); tb.innerHTML = '';
+    an.notes.forEach((n) => {
+      const heard = hzAt(state.saHz, n.cents), ideal = hzAt(state.saHz, posOf(n)), ad = Math.abs(n.dev);
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${n.t0.toFixed(1)} s</td><td class="sw">${esc(n.token)}</td><td>${heard.toFixed(1)} Hz</td><td class="wide">${ideal.toFixed(1)} Hz</td>
+        <td class="${ad <= 15 ? 'off-ok' : ad <= 30 ? 'off-mid' : 'off-bad'}">${n.dev >= 0 ? '+' : ''}${Math.round(n.dev)}¢</td><td class="wide">${esc(westernName(heard))}</td><td>${n.g.type === 'steady' ? '-' : esc(LABEL[n.g.type] || n.g.type)}</td>`;
+      tr.addEventListener('click', () => { viewerMain.focus(n.t0); nowInfo(n.t0 + 0.05); playFrom(n.t0); });
+      tb.appendChild(tr);
+    });
+  }
+  $('btnCopyPitch').addEventListener('click', async () => {
+    if (!state.an) return;
+    const rows = ['Time (s)\tSwara\tHeard (Hz)\tIdeal (Hz)\tOff (cents)\tWestern\tGamaka'].concat(state.an.notes.map((n) =>
+      [n.t0.toFixed(2), n.token, hzAt(state.saHz, n.cents).toFixed(1), hzAt(state.saHz, posOf(n)).toFixed(1), Math.round(n.dev), westernName(hzAt(state.saHz, n.cents)), n.g.type].join('\t')));
+    try { await navigator.clipboard.writeText(rows.join('\n')); $('btnCopyPitch').textContent = 'Copied'; } catch (e) { $('btnCopyPitch').textContent = 'Copy failed'; }
+    setTimeout(() => ($('btnCopyPitch').textContent = 'Copy table'), 1500);
+  });
+
+  const SAY = { S: 'Sa', R1: 'Ri one', R2: 'Ri two', R3: 'Ri three', G2: 'Ga two', G3: 'Ga three', M1: 'Ma one', M2: 'Ma two', P: 'Pa', D1: 'Dha one', D2: 'Dha two', N2: 'Ni two', N3: 'Ni three' };
+  let lastNoteSpoken = -1, lastNowHtml = '';
+  function speak(n) {
+    if (!$('speak').checked || typeof speechSynthesis === 'undefined' || typeof SpeechSynthesisUtterance === 'undefined') return;
+    const u = new SpeechSynthesisUtterance((SAY[n.name] || n.name) + (n.oct > 0 ? ' high' : n.oct < 0 ? ' low' : ''));
+    u.rate = 1.25; speechSynthesis.cancel(); speechSynthesis.speak(u);
+  }
+  // t = null clears the readout. playing = true lets it speak a new note once.
+  function nowInfo(t, playing) {
+    const el = $('nowPlaying'), an = state.an;
+    if (t == null || !an) { el.textContent = 'Play the audio or tap a note to see its pitch here.'; lastNowHtml = ''; lastNoteSpoken = -1; return; }
+    const i = Math.round((t - DSP.T0) / DSP.DT), f = state.f0 && i >= 0 && i < state.f0.length ? state.f0[i] : 0;
+    const k = an.notes.findIndex((n) => t >= n.t0 && t <= n.t1), note = k >= 0 ? an.notes[k] : null;
+    let html;
+    if (!(f > 0)) html = note ? `<b>${esc(note.token)}</b>${hzAt(state.saHz, note.cents).toFixed(1)} Hz` : '<span class="muted">No clear pitch here</span>';
+    else {
+      const sw = DSP.toSwara(1200 * Math.log2(f / state.saHz));
+      html = `<b>${esc(note ? note.token : DSP.symbol(sw.idx, sw.oct))}</b>${f.toFixed(1)} Hz &middot; ${esc(westernName(f))} &middot; ${sw.dev >= 0 ? '+' : ''}${Math.round(sw.dev)}¢ from ${NAMES[sw.idx]}`;
+    }
+    if (html !== lastNowHtml) { el.innerHTML = html; lastNowHtml = html; }
+    if (playing && k !== lastNoteSpoken) { lastNoteSpoken = k; if (note) speak(note); }
+    if (!playing && k < 0) lastNoteSpoken = -1;
+  }
+  $('speak').addEventListener('change', () => { if (!$('speak').checked && typeof speechSynthesis !== 'undefined') speechSynthesis.cancel(); });
 
   // ---------------------------------------------------------------- recording with live tuner (shared by Analyze and Practice)
   let rec = null;
@@ -511,7 +613,7 @@
     if (!state.an || !state.f0) return;
     if (!STORE.available()) { toast('Saving is not available in this browser (private mode?).'); return; }
     const name = ($('saveName').value || state.name || 'Recording').trim().slice(0, 80);
-    const rag = DSP.suggestRagas(state.an.notes, RAGAS);
+    const rag = state.rag || { ok: false };
     try {
       await STORE.put({ name, kind: 'analysis', duration: state.an.duration, saHz: state.saHz, mode: state.mode, f0: state.f0, notation: notationString(state.an),
         raga: rag.ok ? rag.groups[0].ragas.map((x) => x.name).join(' / ') : null, score: null, audio: $('keepAudio').checked && state.blob ? state.blob : null });
@@ -578,7 +680,7 @@
     catch (e) { setAttStatus(''); toast('Could not read that audio.'); }
   }
   async function attemptFromX16(x16) {
-    const f0 = await trackF0(x16, $('attMode').value, setAttStatus);
+    const f0 = (await trackF0(x16, $('attMode').value, setAttStatus)).lines[0].f0;
     setAttStatus('');
     const sa = $('sameSa').checked ? practice.ref.saHz : DSP.detectSa(f0);
     if (!sa) { toast('Could not find a clear pitch in your attempt. Sing closer to the mic.'); return; }
@@ -678,7 +780,7 @@
   });
   async function openItem(id) {
     const r = await STORE.get(id); if (!r || !r.f0) return;
-    state.x16 = null; state.run++; state.f0 = r.f0; state.saHz = r.saHz; state.saAuto = false; state.mode = r.mode || 'solo';
+    state.x16 = null; state.run++; state.f0 = r.f0; state.lines = [{ f0: r.f0, sal: 0, voiced: 1 }]; state.lead = 0; state.drone = null; state.saHz = r.saHz; state.saAuto = false; state.mode = r.mode || 'solo';
     state.name = r.name; state.blob = r.audio || null; state.source = 'library'; $('startField').hidden = true;
     $('mode').value = state.mode; $('saveName').value = r.name;
     setPlayerSource(r.audio || null);

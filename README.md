@@ -7,9 +7,12 @@ Record or upload Carnatic music to see its swaras, gamakas and likely raga, and 
 **Analyze**
 - Mic recording with a live tuner (current swara, cents off, rolling contour) or audio upload, up to 3 minutes, with a start-time control for longer files
 - Two pitch trackers: **Solo** (YIN, for one voice or instrument) and **Song / concert** (spectral melody tracker with drone suppression, for recordings with tanpura, violin or percussion). Uploads default to Song, mic recordings to Solo; switching re-analyses instantly
+- **Lead line**: in a concert recording it follows the most prominent melodic line (the singer, or the violin or veena if it is louder) and ignores the drone and percussion. If a second line exists it is drawn faintly and you can switch to it. It follows the *louder* line; it does not know which instrument is which, and a violin playing the singer's notes is one line, not two
 - Sa (shruti) auto-detection with manual override by note or exact Hz
 - **Fixed-width rolling view**: the contour always fits the screen. Choose a 4 s, 8 s, 15 s or full window; it follows playback or the live signal, has a mini-map to jump around, drag to pan, tap to seek
-- Swara notation with octave marks and gamaka hints (kampita, andolita, jaru, slide, touch), raga suggestion with arohana / avarohana
+- **Pitch call-outs**: a readout while the audio plays or when you tap a note (swara, Hz, Western note, cents off), a per-note table (heard Hz vs ideal Hz for your Sa, cents, gamaka) you can copy, and an optional spoken swara name during playback
+- Swara notation with octave marks and gamaka hints (kampita, andolita, jaru, slide, touch)
+- **Raga identification** with a confidence level: 72 melakartas plus common janyas, scored on swara usage, coverage of the raga's own notes, and ascent/descent fit. It also tests the other possible Sa positions (the same notes are a different raga under a different Sa) and offers them as one-tap alternatives
 
 **Practice**
 - *Self-check*: how far each held swara sits from the pure position, with advice for individual notes that are off
@@ -24,11 +27,12 @@ Record or upload Carnatic music to see its swaras, gamakas and likely raga, and 
 | --- | --- |
 | `index.html`, `style.css`, `app.js` | UI, viewer, practice and library screens |
 | `dsp.js` | YIN pitch tracking, Sa detection, swara and gamaka analysis, raga scoring |
-| `melody.js` | Melody tracker for mixed music |
+| `melody.js` | Melody tracker for mixed music: drone suppression, up to two melodic lines, drone pitch for Sa |
+| `ragaid.js` | Raga identification: swara shares, coverage, direction fit, 12-tonic search, confidence |
 | `practice.js` | Intonation report and DTW reference comparison |
 | `store.js` | IndexedDB library, backup, storage persistence |
-| `ragas.js` | Raga data (starter set, have a guru review it) |
-| `test.js`, `test_mix.js`, `test_practice.js` | Node tests on synthetic audio: `node test.js` etc. |
+| `ragas.js` | Raga data: 72 melakartas generated from the chakra rule (exact) plus 22 hand-written janyas (starter set, have a guru review and extend it; adding one is one line) |
+| `test*.js` | Node tests on synthetic audio: `node test.js`, `test_mix`, `test_practice`, `test_lines`, `test_drone`, `test_raga` |
 | `vercel.json` | Mic permission header, clean URLs |
 
 ## Run locally
@@ -63,20 +67,38 @@ Checked against the providers' pages in November 2026. Limits change, so re-chec
 
 **Recommendation:** keep the browser library as the default. Add accounts and sync only when users ask for another device, using Supabase and storing the pitch track and notation, not audio. Keep audio local; it is the heavy part and the copyright-sensitive part. `store.js` already has the small `put / get / list / remove` interface a cloud backend would plug into.
 
-## Known limits (say these in your pitch before anyone else does)
+## How well does it work? (read this before you pitch)
 
-- **Tested only on synthetic audio and a fake microphone.** Real concerts and film songs are harder: a violin shadowing the voice, a pitched mridangam, reverb. The Song tracker handles drone and percussion in tests; it does not separate a voice from other melodic instruments. Heavily produced songs need source separation, which is the next phase.
-- Gamaka detection is rule-based: steady, oscillation (kampita or andolita), glide, slide. It does not name nokku, sphurita or pratyahatam reliably.
+Everything below was measured on **simulated** phrases and synthetic audio that I generated, not on real recordings. They are built on the same assumptions as the engine, so real-world numbers will be lower. Treat them as "the logic works", not as an accuracy claim.
+
+| Test | Result |
+| --- | --- |
+| Raga, Sa given, clean 30 s phrases (94 ragas x 4 phrases) | right raga group first 99%, in top 3 100% |
+| Same, with 5-10% spurious notes | 98% / 99.7% |
+| Same, but only 9 s of singing | 64% / 89% |
+| Sa auto-detected, 30 s | 88% / 90%; low-confidence answers are flagged |
+| Sa auto-detected, 9 s | 55% / 78% |
+| Loud voice vs soft violin (and swapped) | the louder line is followed 98-100% of the time; the other line is found as line two |
+| Violin doubling the singer an octave up | treated as one line |
+| Sa from a synthetic tanpura | right pitch class in 13 of 14 cases |
+
+"Right raga group" means the right set of notes: ragas that use exactly the same notes are one group.
+
+## Known limits
+
+- **No real recordings tested yet.** Real concerts have a violin shadowing the voice, a pitched mridangam, reverb, and ornaments that move across swaras. The melody tracker handles drone and percussion in tests. It does not separate voice from violin by sound, only by pitch line and loudness. Heavily produced songs need a source-separation model (the next phase).
+- **Raga identification is bounded by what pitch alone can say.** It cannot hear phrases (pidi) or gamaka style, so ragas with identical notes stay grouped (for example Kambhoji and Harikambhoji). Many popular janyas are not in the database yet (Begada, Kedaragowla, Sahana, Anandabhairavi, Behag, Kapi, Atana, Nattai and others): they show up as their parent melakarta, with a note for some.
+- **Sa is the weak link.** The same five notes are Mohanam, Madhyamavati or Shuddha Saveri depending on which note is Sa. The app says so and shows the alternatives, but a firm answer needs the right Sa: set it yourself when you know your shruti.
+- The raga list and the hand-written janya data have not been reviewed by a guru.
+- Gamaka detection is rule-based (steady, kampita, andolita, glide, slide). It does not name nokku, sphurita or pratyahatam reliably.
 - Practice mode does not yet check whether you reproduced each jaru. It checks pitch, gamaka type, timing and steadiness.
-- The self-check cannot tell a flat G3 from a sharp G2 on its own (they are about 70 cents apart); a reference settles it.
-- Raga suggestion uses swara usage, not phrases, so ragas with identical notes are grouped.
-- The pure-intonation grid is a reference, not the truth; singers and ragas vary, so treat under 20 cents as fine.
-- Raga data is a starter set written without a guru's review.
+- The self-check cannot tell a flat G3 from a sharp G2 on its own (about 70 cents apart); a reference settles it.
+- The pure-intonation grid is a reference, not the truth: singers and ragas vary, and many use equal-tempered-like positions. A reading of +20 cents on D2 is often normal.
 
 ## Roadmap
 
 1. **Pilot with 5 to 10 teachers and students.** Record real phrases, note where gamaka labels and scores are wrong. This data is your edge.
 2. Jaru and entry-shape checks in practice mode; progress over time from saved attempts.
 3. Source separation (small ONNX model in the browser) for polyphonic recordings.
-4. Phrase (pidi) matching for raga identification, trained on CompMusic datasets.
+4. Phrase (pidi) matching for raga identification, trained on CompMusic datasets, and many more janyas reviewed by a guru. A small set of real recordings with the raga and Sa labelled by a teacher is the single most useful thing to collect.
 5. Accounts and cross-device sync (Supabase), then a PWA / mobile wrapper.

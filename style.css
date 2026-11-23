@@ -135,3 +135,22 @@ audio { width: 100%; margin-top: 10px; }
   .liveNote { font-size: 38px; }
   .recDot { margin-left: 0; }
 }
+
+/* lead line, now-playing readout, pitch table, raga card additions */
+.leadBox { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; justify-content: space-between; background: #11151c; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; }
+.nowPlaying { background: #11151c; border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 8px; font-variant-numeric: tabular-nums; min-height: 40px; }
+.nowPlaying b { color: var(--accent); font-size: 20px; margin-right: 8px; }
+.tblWrap { overflow-x: auto; margin-top: 8px; }
+.ptable { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 14px; }
+.ptable th { text-align: left; color: var(--muted); font-weight: 600; font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--card); }
+.ptable td { padding: 6px 8px; border-bottom: 1px solid #1d2430; white-space: nowrap; }
+.ptable tr { cursor: pointer; }
+.ptable tr:hover td { background: #1b2230; }
+.ptable td.sw { font-weight: 700; font-size: 15px; }
+.ptable .off-ok { color: var(--green); } .ptable .off-mid { color: var(--yellow); } .ptable .off-bad { color: var(--red); }
+.conf { border-radius: 999px; padding: 2px 10px; font-size: 12px; font-weight: 600; }
+.conf.high { background: #1d4d3b; color: #7ff0c2; } .conf.medium { background: #4d4220; color: #ffd166; } .conf.low { background: #4d2a2a; color: #ff9d9d; }
+.why { margin: 6px 0 0; }
+.altSa { border: 1px dashed #5b4a2a; border-radius: 12px; padding: 10px 12px; margin-bottom: 10px; background: #1a1710; }
+.altSa .btn { margin-top: 6px; }
+@media (max-width: 640px) { .ptable .wide { display: none; } }
